@@ -22,7 +22,9 @@ PLAYER_SPEED = 5
 # --- Proprietăți blocuri ---
 BLOCK_SIZE = 32
 BLOCK_SPEED = 3
-BLOCK_SPAWN_INTERVAL = 500  # milisecunde
+INITIAL_BLOCK_SPAWN_INTERVAL = 700  # milisecunde (mai lent la început)
+MIN_BLOCK_SPAWN_INTERVAL = 200      # milisecunde (limita inferioară)
+DIFFICULTY_INCREASE_INTERVAL = 50   # Cu cât scade intervalul la fiecare 50 de puncte acumulate
 
 # --- Inițializare Pygame ---
 pygame.init()
@@ -74,6 +76,7 @@ class Block(pygame.sprite.Sprite):
         self.rect = self.image.get_rect()
         self.rect.x = x
         self.rect.y = y
+        self.passed = False # Flag pentru a verifica dacă blocul a trecut de jucător
 
     def update(self):
         self.rect.y += BLOCK_SPEED
@@ -84,6 +87,9 @@ class Block(pygame.sprite.Sprite):
 def generate_line_pattern(width, block_size, excluded_column=None):
     blocks = []
     num_blocks_x = width // block_size
+    # Asigură-te că există o coloană liberă
+    if excluded_column is None:
+        excluded_column = random.randint(0, num_blocks_x - 1)
     for i in range(num_blocks_x):
         if i != excluded_column:
             blocks.append(i * block_size)
@@ -92,22 +98,42 @@ def generate_line_pattern(width, block_size, excluded_column=None):
 def generate_zigzag_pattern(width, block_size, current_step):
     blocks = []
     num_blocks_x = width // block_size
-    # Simplificare zigzag: blochează alternativ stânga/dreapta sau centru
-    if current_step % 3 == 0: # Stanga
-        blocks.extend([0 * block_size, 1 * block_size])
-    elif current_step % 3 == 1: # Centru
-        blocks.extend([(num_blocks_x // 2 - 1) * block_size, (num_blocks_x // 2) * block_size])
-    else: # Dreapta
-        blocks.extend([(num_blocks_x - 2) * block_size, (num_blocks_x - 1) * block_size])
-    return blocks
+    
+    # Calea liberă se mișcă de la stânga la dreapta și înapoi
+    # Folosim modulo pentru a ne asigura că `step_in_row` rămâne în limite
+    step_in_row = current_step % (num_blocks_x - 1) 
+    
+    # Direcția zigzagului (stanga-dreapta sau dreapta-stanga)
+    if (current_step // (num_blocks_x - 1)) % 2 == 0: # Merge spre dreapta
+        current_hole_col = step_in_row
+    else: # Merge spre stanga
+        current_hole_col = (num_blocks_x - 1) - step_in_row
 
-def generate_grid_pattern(width, block_size, density=0.5):
-    blocks = []
-    num_blocks_x = width // block_size
     for i in range(num_blocks_x):
-        if random.random() < density: # Șansă de a genera un bloc
+        if i != current_hole_col:
             blocks.append(i * block_size)
     return blocks
+
+def generate_grid_pattern(width, block_size, density=0.3): # Redu densitatea implicită
+    blocks = []
+    num_blocks_x = width // block_size
+    
+    # Alege o coloană liberă aleatorie pentru a garanta o cale
+    free_column = random.randint(0, num_blocks_x - 1)
+    
+    for i in range(num_blocks_x):
+        if i == free_column: # Această coloană rămâne liberă
+            continue
+        if random.random() < density: # Altele au șansă să apară
+            blocks.append(i * block_size)
+    return blocks
+
+# --- Funcție pentru a calcula intervalul curent de spawn ---
+def get_current_spawn_interval(current_score):
+    # Scade intervalul pe măsură ce scorul crește, dar nu sub MIN_BLOCK_SPAWN_INTERVAL
+    reduction = (current_score // 50) * DIFFICULTY_INCREASE_INTERVAL
+    new_interval = max(MIN_BLOCK_SPAWN_INTERVAL, INITIAL_BLOCK_SPAWN_INTERVAL - reduction)
+    return new_interval
 
 # --- Grupuri de sprite-uri ---
 all_sprites = pygame.sprite.Group()
@@ -131,6 +157,21 @@ while running:
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_r and game_over:
+                # Resetare joc
+                game_over = False
+                score = 0
+                start_time = time.time()
+                last_pattern_change_time = time.time()
+                current_pattern = 0
+                last_block_spawn_time = pygame.time.get_ticks()
+
+                all_sprites.empty()
+                blocks.empty()
+                player = Player()
+                all_sprites.add(player)
+
 
     if not game_over:
         current_time = time.time()
@@ -139,18 +180,20 @@ while running:
         if current_time - last_pattern_change_time >= GAME_DURATION_FOR_PATTERN_CHANGE:
             current_pattern = (current_pattern + 1) % 3 # Trece la următorul pattern
             last_pattern_change_time = current_time
-            print(f"Schimbare pattern la: {current_pattern}") # Debugging
 
         # Generează blocuri conform pattern-ului curent
         now = pygame.time.get_ticks()
-        if now - last_block_spawn_time > BLOCK_SPAWN_INTERVAL:
+        current_spawn_interval = get_current_spawn_interval(score) # Ia intervalul dinamic
+        
+        if now - last_block_spawn_time > current_spawn_interval:
             if current_pattern == 0: # Linie cu o gaură aleatorie
                 excluded_col = random.randint(0, (SCREEN_WIDTH // BLOCK_SIZE) - 1)
                 x_positions = generate_line_pattern(SCREEN_WIDTH, BLOCK_SIZE, excluded_col)
             elif current_pattern == 1: # Zigzag
-                x_positions = generate_zigzag_pattern(SCREEN_WIDTH, BLOCK_SIZE, int((current_time - last_pattern_change_time) * 10)) # Folosim timpul pentru variație
-            else: # Grilă (apariție aleatorie)
-                x_positions = generate_grid_pattern(SCREEN_WIDTH, BLOCK_SIZE, density=0.4) # Densitate mai mică pentru grilă
+                # Folosim o valoare discretă pentru current_step pentru a avea variație în zigzag
+                x_positions = generate_zigzag_pattern(SCREEN_WIDTH, BLOCK_SIZE, int(current_time * 5)) # Multiplicator pentru a face zigzagul să progreseze
+            else: # Grilă (apariție aleatorie, cu o cale garantată)
+                x_positions = generate_grid_pattern(SCREEN_WIDTH, BLOCK_SIZE, density=0.3) 
 
             for x_pos in x_positions:
                 new_block = Block(x_pos, -BLOCK_SIZE)
@@ -160,14 +203,20 @@ while running:
 
         keys = pygame.key.get_pressed()
         player.update(keys)
-        blocks.update() # Actualizează poziția blocurilor
+        
+        # Iterăm prin blocuri pentru a actualiza și a verifica dacă au fost evitate
+        # Folosim list() pentru a evita erori de modificare a listei în timpul iterației
+        for block in list(blocks): 
+            block.update()
+            # Verifică dacă blocul a trecut de partea de jos a jucătorului
+            # și nu a fost deja marcat ca "trecut"
+            if block.rect.top > player.rect.bottom and not block.passed:
+                block.passed = True
+                score += 1 # Creștem scorul pentru fiecare bloc evitat
 
         # Verifică coliziuni
         if pygame.sprite.spritecollideany(player, blocks):
             game_over = True
-
-        # Actualizează scorul
-        score = int(time.time() - start_time)
 
         # Desenare
         screen.fill(COLOR_BACKGROUND)
@@ -194,26 +243,6 @@ while running:
         screen.blit(score_final_text, score_final_rect)
         screen.blit(restart_text, restart_rect)
         pygame.display.flip()
-
-        # Așteaptă input pentru a reporni sau ieși
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_r:
-                    # Resetare joc
-                    game_over = False
-                    score = 0
-                    start_time = time.time()
-                    last_pattern_change_time = time.time()
-                    current_pattern = 0
-                    last_block_spawn_time = pygame.time.get_ticks()
-
-                    all_sprites.empty()
-                    blocks.empty()
-                    player = Player()
-                    all_sprites.add(player)
-
 
 pygame.quit()
 sys.exit()

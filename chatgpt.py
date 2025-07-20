@@ -51,17 +51,28 @@ def draw_block(block):
 def spawn_blocks(pattern):
     blocks = []
     if pattern == 'line':
-        for i in range(0, WIDTH, block_size):
-            blocks.append(pygame.Rect(i, -block_size, block_size, block_size))
+        # Adaugă o „poartă” (gol) aleatorie de 1 sau 2 blocuri
+        total_blocks = WIDTH // block_size
+        gate_start = random.randint(1, total_blocks - 2)  # evită marginile
+        gate_width = random.choice([1, 2])  # lățimea porții în blocuri
+
+        for i in range(total_blocks):
+            if gate_start <= i < gate_start + gate_width:
+                continue  # sărim peste blocurile din poartă
+            blocks.append(pygame.Rect(i * block_size, -block_size, block_size, block_size))
+
     elif pattern == 'zigzag':
         for i in range(0, WIDTH, block_size * 2):
             offset = (block_size if (pygame.time.get_ticks() // 500) % 2 == 0 else 0)
             blocks.append(pygame.Rect(i + offset, -block_size, block_size, block_size))
+
     elif pattern == 'grid':
         for i in range(0, WIDTH, block_size * 2):
             if random.random() > 0.5:
                 blocks.append(pygame.Rect(i, -block_size, block_size, block_size))
+
     return blocks
+
 
 def reset_game():
     global blocks, player, score, start_ticks, current_pattern
